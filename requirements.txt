@@ -1,0 +1,25 @@
+# LangChain / LangGraph
+langgraph>=0.2
+langchain-core>=0.2
+langchain-upstage
+
+# UI
+streamlit>=1.35
+
+# 관광 데이터
+requests
+
+# RAG (Phase 3)
+# chromadb
+# rank-bm25
+
+# Google Docs
+google-auth-oauthlib
+google-api-python-client
+
+# 링크 보강 (Phase 3, 선택)
+# tavily-python
+
+# 유틸리티
+python-dotenv
+pydantic>=2
