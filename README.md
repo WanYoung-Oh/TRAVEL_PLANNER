@@ -56,9 +56,59 @@ Travel_Planner/
 │   └── test_nodes.py
 │
 └── docs/
+    ├── OPERATION.md        # 운영·설정·장애 대응 가이드
     ├── PRD.md              # 제품 요구사항 정의서
     └── MVP-Concept.md      # MVP 개념 문서
 ```
+
+### LangGraph 기준 멀티에이전트 아키텍처
+
+이 저장소에서는 **에이전트 = LangGraph 그래프의 노드**로 본다. 각 노드가 **공유 상태(`TravelState`)**를 읽고 갱신하며, LLM·외부 API·사람(Interrupt)과 연결된다. **오케스트레이터**는 `StateGraph`( [`graph/workflow.py`](graph/workflow.py) ): 조건부 분기로 오류 시 종료, 정상 시 다음 노드로 넘긴다.
+
+**멀티에이전트에 가까운 지점**은 `node_plan`이다. 같은 Solar Pro 모델에 **테마만 다른 3개의 일정 생성 작업**을 `ThreadPoolExecutor`로 동시에 돌려, 한 노드 안에서 **병렬 플래너 3명** 역할을 수행한다(그래프 상 노드 1개 · 실행 단위 3개).
+
+```mermaid
+flowchart TB
+  subgraph ui [Client_Streamlit]
+    UI[ChatAndSelect_UI]
+  end
+
+  subgraph orch [LangGraph_StateGraph]
+    direction TB
+    N1[node_analyze_LLM_추출]
+    N2[node_search_Retrieval_TourAPI]
+    N3[node_plan]
+    N4[node_wait_Interrupt_HIL]
+    N5[node_export_GoogleDocs]
+
+    N1 --> N2 --> N3 --> N4 --> N5
+  end
+
+  subgraph parallel [Inside_node_plan]
+    direction LR
+    P1[Planner_시그니처]
+    P2[Planner_감성트렌드]
+    P3[Planner_힐링여유]
+  end
+
+  subgraph ext [External]
+    SOL[Solar_Pro_API]
+    TOU[TourAPI_4_0]
+    GDO[Google_Docs_OAuth]
+  end
+
+  N3 --> parallel
+  parallel --> N4
+  N1 -.-> SOL
+  P1 -.-> SOL
+  P2 -.-> SOL
+  P3 -.-> SOL
+  N2 -.-> TOU
+  N5 -.-> GDO
+  N4 <-.-> UI
+```
+
+- **HIL(Human-in-the-loop)**: `node_wait`의 `interrupt` / `Command(resume=…)` 로 UI와 동기화(앱 워크플로 다이어그램 참고).
 
 ### 앱 워크플로우
 

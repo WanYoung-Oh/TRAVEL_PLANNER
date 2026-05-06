@@ -1,0 +1,47 @@
+classDiagram
+  direction TB
+
+  class TravelPlan {
+    +str theme
+    +str summary
+    +list days
+    +Optional estimated_cost
+  }
+
+  class DayPlan {
+    +int day
+    +list slots
+  }
+
+  class TimeSlot {
+    +str time
+    +Place place
+  }
+
+  class Place {
+    +str name
+    +str category
+    +str address
+    +Optional map_url
+    +Optional map_search_query
+    +str description
+  }
+
+  class TravelState <<TypedDict>> {
+    +str raw_user_input
+    +str destination
+    +str duration
+    +str search_query
+    +list candidates
+    +list plans
+    +TravelPlan selected_plan
+    +Optional doc_url
+    +Optional error
+  }
+
+  TravelPlan *-- DayPlan
+  DayPlan *-- TimeSlot
+  TimeSlot --> Place : place
+
+  note for TravelState "LangGraph 채널 상태.\n후보·일정은 Place·TravelPlan 객체"
+  note for Place "place_map_url()은\n모듈 함수(schema.py)"
