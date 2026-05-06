@@ -2,6 +2,7 @@
 __pycache__/
 *.py[codz]
 *$py.class
+__init__.py
 
 # C extensions
 *.so
@@ -227,3 +228,5 @@ docs/03-analysis/
 docs/개방데이터_활용매뉴얼(국문)
 docs/.bkit-memory.json
 docs/.pdca-status.json
+.CLAUDE.md
+.gitignore
