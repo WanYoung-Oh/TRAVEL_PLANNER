@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# etc.
+.DS_Store
+.bkit/
+.claude/
+token.json
+tests/
+docs/03-analysis/
+docs/개방데이터_활용매뉴얼(국문)
+docs/.bkit-memory.json
+docs/.pdca-status.json
