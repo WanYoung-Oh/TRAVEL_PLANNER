@@ -21,14 +21,14 @@ Upstage Solar Pro API와 LangGraph를 활용한 국내 여행 일정 자동 생�
 
 ## 기술 스택
 
-| 구분 | 기술 |
-|------|------|
-| LLM | Upstage Solar Pro API (`solar-pro`) |
-| 오케스트레이션 | LangGraph 0.2+ |
-| 관광 데이터 | 한국관광공사 TourAPI 4.0 |
-| 문서 내보내기 | Google Docs API v1 + OAuth 2.0 |
-| 프론트엔드 | Streamlit 1.35+ |
-| 언어 | Python 3.11+ |
+| 구분           | 기술                                |
+| -------------- | ----------------------------------- |
+| LLM            | Upstage Solar Pro API (`solar-pro`) |
+| 오케스트레이션 | LangGraph 0.2+                      |
+| 관광 데이터    | 한국관광공사 TourAPI 4.0            |
+| 문서 내보내기  | Google Docs API v1 + OAuth 2.0      |
+| 프론트엔드     | Streamlit 1.35+                     |
+| 언어           | Python 3.11+                        |
 
 ---
 
@@ -85,7 +85,19 @@ _classify(user_input, 대화 히스토리)   ← Solar Pro, 최근 6개 메시�
 ```mermaid
 flowchart TB
   subgraph ui [Client_Streamlit]
-    UI[ChatAndSelect_UI]
+    direction TB
+    IDLE["idle\n채팅 입력·분류"]
+    SELECT["selecting\n3테마 카드 표시"]
+    DONE["done\nDocs URL 표시"]
+    NEWPLAN["[새로운 여행 계획]\n히스토리 유지·상태 초기화"]
+    FULLRESET["[새 여행 계획 시작하기]\n전체 초기화"]
+
+    IDLE -->|"plan 분류"| SELECT
+    SELECT --> DONE
+    SELECT --> NEWPLAN
+    NEWPLAN -->|"idle 복귀"| IDLE
+    DONE --> FULLRESET
+    FULLRESET -->|"idle 복귀"| IDLE
   end
 
   subgraph orch [LangGraph_StateGraph]
@@ -120,7 +132,7 @@ flowchart TB
   P3 -.-> SOL
   N2 -.-> TOU
   N5 -.-> GDO
-  N4 <-.-> UI
+  N4 <-.->|"Interrupt / Command(resume)"| SELECT
 ```
 
 ### 앱 워크플로우
@@ -134,6 +146,8 @@ flowchart TD
     CLASSIFY -->|"plan"| ANALYZE
     CLASSIFY -->|"chat"| SOLAR_CHAT["Solar Pro 스트리밍 답변\n(히스토리 포함)"]
     CLASSIFY -->|"off_topic"| MSG["안내 메시지 반환"]
+    SOLAR_CHAT --> USER
+    MSG --> USER
 
     subgraph GRAPH["LangGraph StateGraph (graph/workflow.py)"]
         ANALYZE["node_analyze\n여행지·기간·검색 쿼리 추출"]
@@ -156,13 +170,27 @@ flowchart TD
         PLAN --> T1 & T2 & T3
         T1 & T2 & T3 --> WAIT
         WAIT -->|오류| ENDERR
-        WAIT -->|선택 완료| EXPORT
+        WAIT -->|"Command(resume=i)"| EXPORT
         EXPORT --> ENDOK([END])
     end
 
+    SELECTING["선택 화면 (app_phase=selecting)\n3테마 카드"]
+    DONE_SCREEN["완료 화면 (app_phase=done)\nDocs URL 표시"]
+
+    WAIT <-->|"Interrupt / 카드 표시"| SELECTING
+    SELECTING -->|"일정 선택"| WAIT
+    EXPORT --> DONE_SCREEN
+
+    NEWPLAN["[새로운 여행 계획]\n히스토리 유지 · 상태 초기화"]
+    FULLRESET["[새 여행 계획 시작하기]\n전체 초기화"]
+
+    SELECTING -->|클릭| NEWPLAN
+    DONE_SCREEN -->|클릭| FULLRESET
+    NEWPLAN -->|"idle 복귀"| USER
+    FULLRESET -->|"idle 복귀"| USER
+
     SOLAR["Upstage\nSolar Pro API"]
     TOURAPI["한국관광공사\nTourAPI 4.0"]
-    UI["Streamlit\n3테마 카드 UI"]
     GDOCS["Google Docs API\n+ OAuth 2.0"]
 
     ANALYZE -.->|LLM 호출| SOLAR
@@ -170,7 +198,6 @@ flowchart TD
     T2 -.->|LLM 호출| SOLAR
     T3 -.->|LLM 호출| SOLAR
     SEARCH -.->|키워드·지역 병렬 검색| TOURAPI
-    WAIT -.->|카드 표시 / resume| UI
     EXPORT -.->|문서 생성| GDOCS
 ```
 
@@ -216,10 +243,10 @@ TAVILY_API_KEY=
 
 **준비물(둘 중 하나면 됨)**
 
-| 방법 | 설명 |
-|------|------|
-| **A. `credentials.json`** | Cloud Console에서 받은 JSON 전체 파일을 프로젝트 루트에 저장 |
-| **B. `.env`만** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 에 데스크톱 클라이언트 값 입력 |
+| 방법                      | 설명                                                                      |
+| ------------------------- | ------------------------------------------------------------------------- |
+| **A. `credentials.json`** | Cloud Console에서 받은 JSON 전체 파일을 프로젝트 루트에 저장              |
+| **B. `.env`만**           | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 에 데스크톱 클라이언트 값 입력 |
 
 > 클라이언트 유형은 반드시 **「데스크톱 앱」**이어야 합니다.
 
@@ -240,10 +267,10 @@ TAVILY_API_KEY=
 
 **주요 오류 해결**
 
-| 오류 | 원인 | 조치 |
-|------|------|------|
-| 「액세스 차단됨·테스터만」 | 테스트 사용자 미등록 | 동의 화면 → 테스트 사용자에 Gmail 추가 |
-| `403 SERVICE_DISABLED` | Docs API 미사용 설정 | 라이브러리에서 Google Docs API 사용 설정 후 1~2분 대기 |
+| 오류                       | 원인                 | 조치                                                   |
+| -------------------------- | -------------------- | ------------------------------------------------------ |
+| 「액세스 차단됨·테스터만」 | 테스트 사용자 미등록 | 동의 화면 → 테스트 사용자에 Gmail 추가                 |
+| `403 SERVICE_DISABLED`     | Docs API 미사용 설정 | 라이브러리에서 Google Docs API 사용 설정 후 1~2분 대기 |
 
 ### 4. 앱 실행
 
@@ -255,11 +282,11 @@ streamlit run app.py
 
 ## 성능 측정 결과 (MacBook M4 16GB 기준)
 
-| 노드 | 소요 시간 | 비고 |
-|------|-----------|------|
-| `node_search` | ~5초 | TourAPI 2개 병렬 호출, 캐시 히트 시 ~0초 |
-| `node_plan` | ~7초 | Solar Pro 3테마 병렬 호출 |
-| **전체 (입력→3안)** | **~12초** | PRD 목표 60초 이내 |
+| 노드                | 소요 시간 | 비고                                     |
+| ------------------- | --------- | ---------------------------------------- |
+| `node_search`       | ~5초      | TourAPI 2개 병렬 호출, 캐시 히트 시 ~0초 |
+| `node_plan`         | ~7초      | Solar Pro 3테마 병렬 호출                |
+| **전체 (입력→3안)** | **~12초** | PRD 목표 60초 이내                       |
 
 ---
 
@@ -285,27 +312,27 @@ class TravelPlan(BaseModel):
 
 ## 에러 처리
 
-| 상황 | 처리 방법 |
-|------|-----------|
-| 여행지·기간 불명확 | Node_Analyze가 재질문 메시지 반환 |
-| 멀티턴 맥락 | `_classify()`가 이전 대화 포함해 여행지·기간 합성 |
-| 여행 외 질문 | off_topic 분류 후 안내 메시지 |
-| TourAPI 결과 0건 | 전국 범위로 확장 재시도 |
-| Solar Pro API 오류 | 최대 2회 재시도 후 안내 메시지 |
-| 지도 링크 없음 | 카카오맵 검색 URL 폴백 |
-| Google OAuth 미완료 | OAuth 안내 후 재시도 유도 |
-| Google Docs 생성 실패 | 일정 텍스트를 화면에 직접 표시 |
+| 상황                  | 처리 방법                                         |
+| --------------------- | ------------------------------------------------- |
+| 여행지·기간 불명확    | Node_Analyze가 재질문 메시지 반환                 |
+| 멀티턴 맥락           | `_classify()`가 이전 대화 포함해 여행지·기간 합성 |
+| 여행 외 질문          | off_topic 분류 후 안내 메시지                     |
+| TourAPI 결과 0건      | 전국 범위로 확장 재시도                           |
+| Solar Pro API 오류    | 최대 2회 재시도 후 안내 메시지                    |
+| 지도 링크 없음        | 카카오맵 검색 URL 폴백                            |
+| Google OAuth 미완료   | OAuth 안내 후 재시도 유도                         |
+| Google Docs 생성 실패 | 일정 텍스트를 화면에 직접 표시                    |
 
 ---
 
 ## API 키 발급
 
-| API | 발급처 |
-|-----|--------|
-| Solar Pro | [Upstage Console](https://console.upstage.ai/) |
-| TourAPI 4.0 | [한국관광공사 TourAPI](https://api.visitkorea.or.kr/) |
-| Google Docs | [Google Cloud Console](https://console.cloud.google.com/) |
-| Tavily (선택) | [Tavily](https://app.tavily.com/) |
+| API           | 발급처                                                    |
+| ------------- | --------------------------------------------------------- |
+| Solar Pro     | [Upstage Console](https://console.upstage.ai/)            |
+| TourAPI 4.0   | [한국관광공사 TourAPI](https://api.visitkorea.or.kr/)     |
+| Google Docs   | [Google Cloud Console](https://console.cloud.google.com/) |
+| Tavily (선택) | [Tavily](https://app.tavily.com/)                         |
 
 ---
 
