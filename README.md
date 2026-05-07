@@ -8,11 +8,14 @@ Upstage Solar Pro API와 LangGraph를 활용한 국내 여행 일정 자동 생�
 
 ## 주요 기능
 
-- **대화형 입력**: 챗봇 UI로 여행지와 기간을 자연어로 입력
+- **일반 여행 상담 + 일정 생성 통합 챗봇**: 여행 정보 질문·추천 등 일반 대화와 일정 생성 요청을 자동으로 분류해 처리
+- **멀티턴 컨텍스트 인식**: "여수 어때?" → "2박 3일로 가면?" 처럼 여러 턴에 걸쳐 입력해도 일정 생성 요청으로 감지
+- **대화 히스토리 유지**: 세션 내 대화 내용이 누적되어 자연스러운 맥락 유지
 - **3테마 일정 병렬 생성**: 시그니처 / 감성·트렌드 / 힐링·여유 테마를 동시에 생성
 - **실시간 스트리밍**: 노드 실행 단계별 진행 상황 표시
 - **지도 링크 제공**: TourAPI 좌표 기반 링크 + 카카오맵 폴백
 - **Google Docs 내보내기**: 선택한 일정을 표 형태로 Google Docs에 자동 생성
+- **TourAPI 응답 캐싱**: 동일 목적지 재검색 시 HTTP 호출 생략 (TTL 1시간)
 
 ---
 
@@ -33,19 +36,20 @@ Upstage Solar Pro API와 LangGraph를 활용한 국내 여행 일정 자동 생�
 
 ```
 Travel_Planner/
-├── app.py                  # Streamlit 진입점
+├── app.py                  # Streamlit 진입점 (챗 분류·히스토리·그래프 호출)
 ├── requirements.txt
 ├── .env.example            # 환경변수 예시 (키 이름만 포함)
 │
 ├── graph/
 │   ├── state.py            # TravelState TypedDict
-│   ├── nodes.py            # 5개 LangGraph 노드 함수
+│   ├── nodes.py            # 5개 LangGraph 노드 함수 (타이머 포함)
 │   └── workflow.py         # LangGraph 워크플로 조립
 │
 ├── tools/
-│   ├── solar_api.py        # Solar Pro API 래퍼 (재시도 포함)
-│   ├── tour_api.py         # TourAPI 4.0 클라이언트
-│   └── google_docs.py      # Google Docs API + OAuth 2.0
+│   ├── solar_api.py        # Solar Pro API 래퍼 (재시도·히스토리 스트리밍)
+│   ├── tour_api.py         # TourAPI 4.0 클라이언트 (인메모리 캐시)
+│   ├── google_docs.py      # Google Docs API + OAuth 2.0
+│   └── search.py           # Tavily 링크 보강 (선택, TAVILY_API_KEY 필요)
 │
 ├── models/
 │   └── schema.py           # Place, DayPlan, TravelPlan Pydantic 모델
@@ -61,11 +65,22 @@ Travel_Planner/
     └── MVP-Concept.md      # MVP 개념 문서
 ```
 
-### LangGraph 기준 멀티에이전트 아키텍처
+### 챗봇 분류 흐름
 
-이 저장소에서는 **에이전트 = LangGraph 그래프의 노드**로 본다. 각 노드가 **공유 상태(`TravelState`)**를 읽고 갱신하며, LLM·외부 API·사람(Interrupt)과 연결된다. **오케스트레이터**는 `StateGraph`( [`graph/workflow.py`](graph/workflow.py) ): 조건부 분기로 오류 시 종료, 정상 시 다음 노드로 넘긴다.
+```
+사용자 입력 (단일 또는 멀티턴)
+    ↓
+_classify(user_input, 대화 히스토리)   ← Solar Pro, 최근 6개 메시지 포함
+    ├─ "plan"      → 여행지+기간 합성 → LangGraph 파이프라인
+    ├─ "chat"      → stream_messages()로 히스토리 포함 스트리밍 답변
+    └─ "off_topic" → 안내 메시지
+```
 
-**멀티에이전트에 가까운 지점**은 `node_plan`이다. 같은 Solar Pro 모델에 **테마만 다른 3개의 일정 생성 작업**을 `ThreadPoolExecutor`로 동시에 돌려, 한 노드 안에서 **병렬 플래너 3명** 역할을 수행한다(그래프 상 노드 1개 · 실행 단위 3개).
+### LangGraph 기반 아키텍처
+
+**에이전트 = LangGraph 그래프의 노드**. 각 노드가 **공유 상태(`TravelState`)**를 읽고 갱신하며, LLM·외부 API·사람(Interrupt)과 연결됩니다.
+
+`node_plan`은 같은 Solar Pro 모델에 **테마만 다른 3개 일정 생성 작업**을 `ThreadPoolExecutor`로 동시에 돌려, 한 노드 안에서 **병렬 플래너 3명** 역할을 수행합니다.
 
 ```mermaid
 flowchart TB
@@ -108,18 +123,21 @@ flowchart TB
   N4 <-.-> UI
 ```
 
-- **HIL(Human-in-the-loop)**: `node_wait`의 `interrupt` / `Command(resume=…)` 로 UI와 동기화(앱 워크플로 다이어그램 참고).
-
 ### 앱 워크플로우
 
 ```mermaid
 flowchart TD
-    USER([사용자 — 여행지·기간 자연어 입력])
-    USER --> ANALYZE
+    USER([사용자 — 자연어 입력])
+    USER --> CLASSIFY
+
+    CLASSIFY{"_classify()\n대화 맥락 포함 분류"}
+    CLASSIFY -->|"plan"| ANALYZE
+    CLASSIFY -->|"chat"| SOLAR_CHAT["Solar Pro 스트리밍 답변\n(히스토리 포함)"]
+    CLASSIFY -->|"off_topic"| MSG["안내 메시지 반환"]
 
     subgraph GRAPH["LangGraph StateGraph (graph/workflow.py)"]
         ANALYZE["node_analyze\n여행지·기간·검색 쿼리 추출"]
-        SEARCH["node_search\n관광지·맛집 후보 수집 ≤ 20건"]
+        SEARCH["node_search\n관광지·맛집 후보 수집 ≤ 20건\n(병렬 TourAPI + 캐시)"]
         PLAN["node_plan\n3테마 일정 병렬 생성"]
         WAIT["node_wait\nLangGraph Interrupt — 선택 대기"]
         EXPORT["node_export\nGoogle Docs 표+링크 생성"]
@@ -151,7 +169,7 @@ flowchart TD
     T1 -.->|LLM 호출| SOLAR
     T2 -.->|LLM 호출| SOLAR
     T3 -.->|LLM 호출| SOLAR
-    SEARCH -.->|키워드·지역 검색| TOURAPI
+    SEARCH -.->|키워드·지역 병렬 검색| TOURAPI
     WAIT -.->|카드 표시 / resume| UI
     EXPORT -.->|문서 생성| GDOCS
 ```
@@ -188,8 +206,8 @@ TOUR_API_DAILY_LIMIT=1000
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 
-# Tavily 링크 보강 (Phase 3, 선택)
-TAVILY_API_KEY=your_key_here
+# Tavily 링크 보강 (선택 — 미설정 시 카카오맵 검색 쿼리 URL로 폴백)
+TAVILY_API_KEY=
 ```
 
 ### 3. Google OAuth 설정 (Google Docs 내보내기)
@@ -203,44 +221,29 @@ TAVILY_API_KEY=your_key_here
 | **A. `credentials.json`** | Cloud Console에서 받은 JSON 전체 파일을 프로젝트 루트에 저장 |
 | **B. `.env`만** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 에 데스크톱 클라이언트 값 입력 |
 
-> 클라이언트 유형은 반드시 **「데스크톱 앱」**이어야 합니다.  
-> 「웹 애플리케이션」용 JSON만 있으면 이 프로젝트와 맞지 않습니다.
+> 클라이언트 유형은 반드시 **「데스크톱 앱」**이어야 합니다.
 
 **Cloud Console 절차**
 
-1. [Google Cloud Console](https://console.cloud.google.com/)에서 프로젝트 선택 또는 생성  
-2. **API 및 서비스 → 라이브러리**에서 **Google Docs API** 검색 후 **사용 설정** (**필수** — 끄면 Docs 생성 시 403 오류가 납니다)  
-3. **API 및 서비스 → OAuth 동의 화면**  
-   - 사용자 유형: 보통 **외부**  
-   - 앱 이름 등 필수 항목 저장  
-   - **게시 상태가「테스트」인 경우(기본):** 아래 **테스트 사용자**에 **로그인에 쓸 Gmail**을 반드시 추가해야 합니다.  
-     - 화면에서 **대상**: **테스트 사용자** (또는 Test users)  
-     - **+ ADD USERS** 로 **본인 Gmail 주소**(로그인할 계정과 동일)를 추가 후 저장  
-   - 이 단계를 빼먹으면 브라우저에 **「액세스 차단됨 … 앱은 현재 테스트 중이며 개발자가 승인한 테스터만」** 이 뜹니다.  
+1. [Google Cloud Console](https://console.cloud.google.com/)에서 프로젝트 선택 또는 생성
+2. **API 및 서비스 → 라이브러리**에서 **Google Docs API** 검색 후 **사용 설정** (**필수** — 끄면 Docs 생성 시 403 오류)
+3. **API 및 서비스 → OAuth 동의 화면**
+   - 사용자 유형: 보통 **외부**
+   - **테스트 사용자**에 로그인에 쓸 Gmail 추가 (누락 시 「액세스 차단됨」)
+4. **사용자 인증 정보 만들기 → OAuth 클라이언트 ID → 데스크톱 앱**
+   - JSON 다운로드 → `credentials.json`으로 프로젝트 루트에 저장
+   - 또는 ID·비밀을 `.env`에 입력
 
-4. **API 및 서비스 → 사용자 인증 정보 → 사용자 인증 정보 만들기 → OAuth 클라이언트 ID**  
-   - 애플리케이션 유형: **데스크톱 앱**  
-   - 만들기 후 **JSON 다운로드** → 파일명을 `credentials.json`으로 하여 프로젝트 루트에 저장  
-   - 또는 화면에 나온 **클라이언트 ID / 클라이언트 보안 비밀번호**를 `.env`의 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`에 붙여넣기  
+**첫 성공 후** 루트에 `token.json` 생성 → 이후 재로그인 불필요.
 
-**앱에서 일정을 Docs로 내보낼 때**
+**민감 파일:** `credentials.json`, `token.json`, `.env`는 Git에 올리지 마세요.
 
-- 터미널에서 `streamlit run app.py`로 실행한 상태에서 **일정 선택** → 브라우저에 Google 로그인·권한 허용 창이 뜨면 허용  
-- 성공 후 프로젝트 루트에 **`token.json`**이 생기며, 다음부터는 같은 기기에서 재로그인 없이 사용할 수 있는 경우가 많습니다  
+**주요 오류 해결**
 
-**민감 파일:** `credentials.json`, `token.json`, `.env`는 Git에 올리지 마세요. (저장소 루트 `.gitignore`에 포함됨)
-
-**Google 로그인 시 「액세스 차단됨」「테스터만 앱에 액세스」가 뜰 때**
-
-- 원인: OAuth 동의 화면이 **테스트** 모드인데, 지금 로그인한 Gmail이 **테스트 사용자 목록에 없음**입니다.  
-- 조치: [Cloud Console → API 및 서비스 → OAuth 동의 화면](https://console.cloud.google.com/apis/credentials/consent) → **대상** 섹션의 **테스트 사용자**에 해당 Gmail 추가 → 저장 후, 브라우저에서 다시 일정 내보내기(또는 `token.json` 삭제 후 재시도).  
-- 앱 이름이 `tour` 등으로 보이는 것은 동의 화면에 적은 **앱 이름**이며, 프로젝트 설정 오류가 아닙니다.
-
-**「Google Docs API has not been used in project … before or it is disabled」(403) 가 뜰 때**
-
-- 원인: **OAuth와 동일한** Google Cloud 프로젝트에서 **Google Docs API**가 꺼져 있음 (인증은 됐는데 API가 비활성).  
-- 조치: 오류 화면에 나온 링크(예: `…/apis/api/docs.googleapis.com/overview?project=…`)를 열어 **사용**을 누르거나, 위 절차 **2번**(라이브러리에서 Google Docs API 사용 설정)을 실행합니다.  
-- 방금 켰다면 **1~2분** 기다린 뒤 Streamlit에서 다시 「이 일정 선택」을 눌러 보세요.
+| 오류 | 원인 | 조치 |
+|------|------|------|
+| 「액세스 차단됨·테스터만」 | 테스트 사용자 미등록 | 동의 화면 → 테스트 사용자에 Gmail 추가 |
+| `403 SERVICE_DISABLED` | Docs API 미사용 설정 | 라이브러리에서 Google Docs API 사용 설정 후 1~2분 대기 |
 
 ### 4. 앱 실행
 
@@ -250,32 +253,13 @@ streamlit run app.py
 
 ---
 
-## LangGraph 워크플로
+## 성능 측정 결과 (MacBook M4 16GB 기준)
 
-```
-[사용자 입력]
-     │
-     ▼
-Node_Analyze     — 여행지·기간 추출, 검색 쿼리 생성
-     │
-     ▼
-Node_Search      — TourAPI로 관광지·맛집 후보 수집
-     │
-     ▼
-Node_Plan        — 3테마 일정 병렬 생성 (ThreadPoolExecutor)
-  ├── 시그니처
-  ├── 감성/트렌드
-  └── 힐링/여유
-     │
-     ▼
-Node_Wait        — LangGraph Interrupt로 사용자 선택 대기
-     │
-     ▼
-Node_Export      — 선택 일정을 Google Docs 표로 생성
-     │
-     ▼
-[Google Docs URL 반환]
-```
+| 노드 | 소요 시간 | 비고 |
+|------|-----------|------|
+| `node_search` | ~5초 | TourAPI 2개 병렬 호출, 캐시 히트 시 ~0초 |
+| `node_plan` | ~7초 | Solar Pro 3테마 병렬 호출 |
+| **전체 (입력→3안)** | **~12초** | PRD 목표 60초 이내 |
 
 ---
 
@@ -284,13 +268,14 @@ Node_Export      — 선택 일정을 Google Docs 표로 생성
 ```python
 class Place(BaseModel):
     name: str
-    category: str          # "명소" | "맛집" | "카페" 등
+    category: str               # "명소" | "맛집" | "카페" 등
     address: str
-    map_url: str | None    # 없으면 카카오맵 폴백
+    map_url: str | None         # TourAPI 좌표 링크; 없으면 카카오맵 폴백
+    map_search_query: str | None  # 카카오맵 검색용 공식 지명 (수식어 제외)
     description: str
 
 class TravelPlan(BaseModel):
-    theme: str             # "시그니처" | "감성/트렌드" | "힐링/여유"
+    theme: str                  # "시그니처" | "감성/트렌드" | "힐링/여유"
     summary: str
     days: list[DayPlan]
     estimated_cost: str | None
@@ -303,12 +288,12 @@ class TravelPlan(BaseModel):
 | 상황 | 처리 방법 |
 |------|-----------|
 | 여행지·기간 불명확 | Node_Analyze가 재질문 메시지 반환 |
+| 멀티턴 맥락 | `_classify()`가 이전 대화 포함해 여행지·기간 합성 |
+| 여행 외 질문 | off_topic 분류 후 안내 메시지 |
 | TourAPI 결과 0건 | 전국 범위로 확장 재시도 |
 | Solar Pro API 오류 | 최대 2회 재시도 후 안내 메시지 |
 | 지도 링크 없음 | 카카오맵 검색 URL 폴백 |
 | Google OAuth 미완료 | OAuth 안내 후 재시도 유도 |
-| Google 「테스터만 액세스」 차단 | 동의 화면 **테스트 사용자**에 로그인 Gmail 추가 |
-| Google Docs API 미사용(403, `SERVICE_DISABLED`) | Cloud 프로젝트에서 **Google Docs API 사용 설정** 후 1~2분 대기 |
 | Google Docs 생성 실패 | 일정 텍스트를 화면에 직접 표시 |
 
 ---
@@ -329,7 +314,8 @@ class TravelPlan(BaseModel):
 - [x] **Phase 1 — Core Logic**: LangGraph 기본 워크플로, Solar Pro·TourAPI 연동, Streamlit 채팅 UI
 - [x] **Phase 2 — Multi-Theme**: 3테마 병렬 생성, Node_Wait(Interrupt), 3카드 선택 UI
 - [x] **Phase 3 — Link & Doc**: 지도 링크 수집, Google Docs 표+하이퍼링크 내보내기
-- [ ] **Phase 4 — QA & MVP**: TourAPI 응답 캐싱, 속도 최적화, 배포
+- [x] **Phase 4 — QA & MVP**: TourAPI 응답 캐싱, 응답 속도 측정·최적화
+- [x] **Phase 5 — Chat UX**: 일반 여행 상담 챗봇 통합, 멀티턴 컨텍스트 인식, 대화 히스토리 유지
 
 ---
 

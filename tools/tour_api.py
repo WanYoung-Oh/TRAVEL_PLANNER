@@ -1,6 +1,12 @@
 import os
+import time
+
 import requests
 from models.schema import Place
+
+# 동일 쿼리 반복 호출을 막는 인메모리 캐시 (TTL 1시간)
+_cache: dict[str, tuple[list, float]] = {}
+_CACHE_TTL = 3600
 
 BASE_URL = "https://apis.data.go.kr/B551011/KorService2"
 
@@ -28,6 +34,12 @@ def _get_api_key() -> str:
 
 def _get(endpoint: str, extra_params: dict) -> list[dict]:
     """serviceKey를 URL에 직접 삽입해 requests 이중인코딩 방지 (data.go.kr 500 오류 대응)."""
+    cache_key = f"{endpoint}|{sorted(extra_params.items())}"
+    cached = _cache.get(cache_key)
+    if cached and time.time() - cached[1] < _CACHE_TTL:
+        print(f"[TourAPI] 캐시 히트: {endpoint} {extra_params}")
+        return cached[0]
+
     api_key = _get_api_key()
     base = f"{BASE_URL}/{endpoint}?serviceKey={api_key}"
     common = {
@@ -48,7 +60,9 @@ def _get(endpoint: str, extra_params: dict) -> list[dict]:
     if header.get("resultCode", "0000") != "0000":
         raise RuntimeError(f"TourAPI 오류: {header.get('resultMsg')} (code={header.get('resultCode')})")
     items = data.get("body", {}).get("items") or {}
-    return items.get("item", [])
+    result = items.get("item", [])
+    _cache[cache_key] = (result, time.time())
+    return result
 
 
 def get_area_code(destination: str) -> str:

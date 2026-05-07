@@ -52,3 +52,23 @@ def stream(system: str, user: str, temperature: float = 0.7):
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
+
+
+def stream_messages(messages: list[dict], system: str, temperature: float = 0.7):
+    """대화 히스토리를 포함한 Solar Pro 스트리밍 제너레이터.
+
+    messages: [{"role": "user"|"assistant", "content": "..."}, ...]
+    system 프롬프트는 자동으로 맨 앞에 삽입됩니다.
+    """
+    client = get_client()
+    full = [{"role": "system", "content": system}] + messages
+    response = client.chat.completions.create(
+        model=SOLAR_MODEL,
+        messages=full,
+        temperature=temperature,
+        stream=True,
+    )
+    for chunk in response:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta

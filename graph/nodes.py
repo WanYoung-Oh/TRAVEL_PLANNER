@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langgraph.types import interrupt
@@ -69,19 +70,22 @@ def node_analyze(state: TravelState) -> dict:
 
 
 def node_search(state: TravelState) -> dict:
+    t0 = time.perf_counter()
     destination = state.get("destination", "")
     search_query = state.get("search_query") or f"{destination} 여행 명소 맛집"
 
     try:
-        # 1차: 지역 한정 키워드 검색
-        candidates = tour_api.search_keyword(search_query, destination)
+        # 키워드 검색 + 음식점 목록 병렬 호출
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_keyword = executor.submit(tour_api.search_keyword, search_query, destination)
+            f_restaurants = executor.submit(tour_api.area_based_list, destination, "음식점")
+            candidates = f_keyword.result()
+            restaurants = f_restaurants.result()
 
-        # 0건이면 지역 코드 없이 전국 범위 재시도
+        # 키워드 검색 0건이면 전국 범위 재시도 (순차 — 첫 결과 확인 후)
         if not candidates:
             candidates = tour_api.search_keyword(f"{destination} 명소", "")
 
-        # 맛집 보완 (지역 기반 음식점 타입)
-        restaurants = tour_api.area_based_list(destination, "음식점")
         seen = {p.name for p in candidates}
         for place in restaurants:
             if place.name not in seen:
@@ -96,6 +100,7 @@ def node_search(state: TravelState) -> dict:
                 )
             }
 
+        print(f"[timer] node_search: {time.perf_counter() - t0:.2f}s ({len(candidates[:20])}곳)")
         return {"candidates": candidates[:20], "error": None}
 
     except Exception as exc:
@@ -165,6 +170,7 @@ def _build_plan(theme: str, candidates: list[Place], destination: str, duration:
 
 
 def node_plan(state: TravelState) -> dict:
+    t0 = time.perf_counter()
     candidates: list[Place] = list(state.get("candidates", []))
     duration = state.get("duration", "")
     destination = state.get("destination", "")
@@ -181,6 +187,7 @@ def node_plan(state: TravelState) -> dict:
                 results[future_to_idx[future]] = future.result()
 
         plans = [results[i] for i in sorted(results)]
+        print(f"[timer] node_plan: {time.perf_counter() - t0:.2f}s (3테마 병렬)")
         return {"plans": plans, "error": None}
     except Exception as exc:
         return {"error": f"일정 생성 중 오류가 발생했습니다: {exc}"}

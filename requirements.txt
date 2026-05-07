@@ -18,7 +18,7 @@ google-auth-oauthlib
 google-api-python-client
 
 # 링크 보강 (Phase 3, 선택)
-# tavily-python
+tavily-python
 
 # 유틸리티
 python-dotenv
