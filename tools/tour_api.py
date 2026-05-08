@@ -46,7 +46,7 @@ def _get(endpoint: str, extra_params: dict) -> list[dict]:
         "MobileOS": "ETC",
         "MobileApp": "SolarTravelPlanner",
         "_type": "json",
-        "numOfRows": "20",
+        "numOfRows": "30",
         **extra_params,
     }
     resp = requests.get(base, params=common, timeout=10)

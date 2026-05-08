@@ -100,8 +100,8 @@ def node_search(state: TravelState) -> dict:
                 )
             }
 
-        print(f"[timer] node_search: {time.perf_counter() - t0:.2f}s ({len(candidates[:20])}곳)")
-        return {"candidates": candidates[:20], "error": None}
+        print(f"[timer] node_search: {time.perf_counter() - t0:.2f}s ({len(candidates[:30])}곳)")
+        return {"candidates": candidates[:30], "error": None}
 
     except Exception as exc:
         return {"error": f"장소 검색 중 오류가 발생했습니다: {exc}"}
